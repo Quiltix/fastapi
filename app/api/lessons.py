@@ -14,9 +14,15 @@ from app.auth.utils import get_current_user, get_current_admin_user
 from app.models.user import User
 from app.schemas.material import MaterialUpdate, MaterialOut, MaterialCreate
 
-router = APIRouter(prefix="/lessons", tags=["Lessons (Schedule)"])
+router = APIRouter(prefix="/lessons", tags=["Lessons & Materials"])
 
-@router.post("/", response_model=LessonOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=LessonOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать новый урок [Admin]",
+    description="Создает новый урок для указанного в теле запроса курса. Доступно только для администраторов."
+)
 async def create_lesson(
     lesson: LessonCreate,
     db: AsyncSession = Depends(get_db),
@@ -33,15 +39,24 @@ async def create_lesson(
     await db.refresh(db_lesson)
     return db_lesson
 
-@router.get("/{lesson_id}", response_model=LessonOut)
+@router.get(
+    "/{lesson_id}",
+    response_model=LessonOut,
+    summary="Получить урок по ID",
+    description="Возвращает подробную информацию о конкретном уроке по его ID. Доступно всем авторизованным пользователям."
+)
 async def get_lesson(lesson_id: int, db: AsyncSession = Depends(get_db)):
     lesson = await db.get(Lesson, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     return lesson
 
-@router.get("/{course_id}/lessons", response_model=List[LessonOut],
-            summary="Получить уроки для конкретного курса")
+@router.get(
+    "/{course_id}/lessons",
+    response_model=List[LessonOut],
+    summary="Получить уроки для конкретного курса",
+    description="Возвращает список всех уроков, принадлежащих конкретному курсу, с поддержкой пагинации. Доступно для авторизованных пользователей."
+)
 async def get_lessons_for_course(
     course_id: int,
     skip: int = Query(0, ge=0, description="Сколько уроков пропустить"),
@@ -70,19 +85,21 @@ class ProgressStatus(str, Enum):
     uncompleted = "uncompleted"
 
 
-@router.get("/{course_id}/progress", response_model=List[LessonWithProgress],
-            summary="Получить прогресс по урокам курса")
+@router.get(
+    "/{course_id}/progress",
+    response_model=List[LessonWithProgress],
+    summary="Получить прогресс по урокам курса",
+    description="Возвращает список уроков курса с информацией о прогрессе текущего пользователя. Позволяет фильтровать по статусу `completed` или `uncompleted`."
+)
 async def get_course_progress(
         course_id: int,
         status: Optional[ProgressStatus] = Query(None, description="Фильтр по статусу прохождения"),
         db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(get_current_user)  # Прогресс индивидуален, нужна авторизация
+        current_user: User = Depends(get_current_user)
 ):
-
     course = await db.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-
 
     query = (
         select(
@@ -91,8 +108,8 @@ async def get_course_progress(
             Lesson.scheduled_at,
             func.coalesce(Progress.is_completed, False).label("is_completed")
         )
-        .select_from(Lesson)  # Явно указываем, с какой таблицы начинаем
-        .outerjoin(  # Используем LEFT JOIN, чтобы получить ВСЕ уроки, даже без прогресса
+        .select_from(Lesson)
+        .outerjoin(
             Progress,
             (Progress.lesson_id == Lesson.id) & (Progress.user_id == current_user.id)
         )
@@ -110,24 +127,23 @@ async def get_course_progress(
     return lessons_with_progress
 
 
-@router.post("/{lesson_id}/materials", response_model=MaterialOut, status_code=status.HTTP_201_CREATED,
-             summary="Добавить материал к уроку")
+@router.post(
+    "/{lesson_id}/materials",
+    response_model=MaterialOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Добавить материал к уроку [Admin]",
+    description="Создает новый учебный материал и привязывает его к конкретному уроку по ID. Доступно только администраторам."
+)
 async def create_material_for_lesson(
         lesson_id: int,
         material_data: MaterialCreate,
         db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(get_current_admin_user)  # Только админы могут добавлять материалы
+        current_user: User = Depends(get_current_admin_user)
 ):
-    """
-    Создание нового учебного материала для конкретного урока.
-    Доступно только для администраторов.
-    """
-    # Шаг 1: Проверяем, существует ли урок, к которому добавляем материал
     lesson = await db.get(Lesson, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
 
-    # Шаг 2: Создаем новый материал, привязывая его к уроку
     db_material = Material(
         **material_data.model_dump(),
         lesson_id=lesson_id
@@ -139,16 +155,17 @@ async def create_material_for_lesson(
     return db_material
 
 
-@router.get("/{lesson_id}/materials", response_model=List[MaterialOut],
-            summary="Получить материалы урока")
+@router.get(
+    "/{lesson_id}/materials",
+    response_model=List[MaterialOut],
+    summary="Получить материалы урока",
+    description="Возвращает список всех учебных материалов для конкретного урока. Доступно для авторизованных пользователей."
+)
 async def get_materials_for_lesson(
         lesson_id: int,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_user)
 ):
-    """
-    Получение списка всех материалов для конкретного урока.
-    """
     lesson = await db.get(Lesson, lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
@@ -160,18 +177,18 @@ async def get_materials_for_lesson(
     return materials
 
 
-@router.put("/materials/{material_id}", response_model=MaterialOut,
-            summary="Обновить материал")
+@router.put(
+    "/materials/{material_id}",
+    response_model=MaterialOut,
+    summary="Обновить материал [Admin]",
+    description="Обновляет информацию о материале по его ID. Позволяет частично обновлять данные. Доступно только администраторам."
+)
 async def update_material(
         material_id: int,
         material_data: MaterialUpdate,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_admin_user)
 ):
-    """
-    Обновление информации о материале по его ID.
-    Доступно только для администраторов.
-    """
     db_material = await db.get(Material, material_id)
     if not db_material:
         raise HTTPException(status_code=404, detail="Material not found")
@@ -186,17 +203,17 @@ async def update_material(
     return db_material
 
 
-@router.delete("/materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="Удалить материал")
+@router.delete(
+    "/materials/{material_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить материал [Admin]",
+    description="Удаляет учебный материал по его ID. Действие необратимо. Доступно только администраторам."
+)
 async def delete_material(
         material_id: int,
         db: AsyncSession = Depends(get_db),
         current_user: User = Depends(get_current_admin_user)
 ):
-    """
-    Удаление материала по его ID.
-    Доступно только для администраторов.
-    """
     db_material = await db.get(Material, material_id)
     if not db_material:
         raise HTTPException(status_code=404, detail="Material not found")
@@ -204,4 +221,4 @@ async def delete_material(
     await db.delete(db_material)
     await db.commit()
 
-    return None  # При статусе 204 тело ответа должно быть пустым
+    return None
