@@ -1,78 +1,99 @@
-from passlib.context import CryptContext
-from jose import jwt
-from datetime import datetime, timedelta
+# app/security.py
+
+import bcrypt
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.security import HTTPBearer
+from jose import JWTError, jwt
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.database import get_db
 from app.models.user import User
+from app.schemas.token import TokenData
 
-# НАХУЙ .env - ЖЕСТКО ЗАДАЁМ
-SECRET_KEY = "your-super-secret-key-1234567890"
+SECRET_KEY = "a_very_secret_key_for_course_platform"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+ACCESS_TOKEN_EXPIRE_MINUTES = 120
 
 
-# 1. ПАРОЛЬ
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    # Получение хеша пароля.
+    password_bytes = password.encode('utf-8')
+
+    salt = bcrypt.gensalt()
+    hashed_password_bytes = bcrypt.hashpw(password_bytes, salt)
+
+    return hashed_password_bytes.decode('utf-8')
 
 
-def get_password_hash(password):
-    return pwd_context.hash(password)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # Сверяет обычный пароль с захешированным паролем.
+    plain_password_bytes = plain_password.encode('utf-8')
+
+    hashed_password_bytes = hashed_password.encode('utf-8')
+
+    return bcrypt.checkpw(plain_password_bytes, hashed_password_bytes)
 
 
-# 2. ТОКЕН (ПРОСТО)
-def create_access_token(username: str):
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": username, "exp": expire}
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    return token
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    # Создает токен.
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-# 3. ПРОВЕРКА ТОКЕНА (ПРОСТО)
-def verify_token(token: str):
+def decode_token(token: str) -> TokenData:
+    #Декодирует токен и возвращает данные токена.
+
+    payload = jwt.decode(token, SECRET_KEY, algorithms=ALGORITHM)
+
+    return TokenData.model_validate(payload)
+
+async def check_jwt(credentials: HTTPBearer = Depends(HTTPBearer(auto_error=False))) -> int:
+    # Проверяет токен пользователя, используется в роутерах.
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            return None
-        return username
-    except:
-        return None
-
-
-# 4. ПОЛЬЗОВАТЕЛЬ ИЗ БАЗЫ
-async def get_user_by_username(db: AsyncSession, username: str):
-    result = await db.execute(select(User).where(User.username == username))
-    return result.scalars().first()
-
-
-async def authenticate_user(db: AsyncSession, username: str, password: str):
-    user = await get_user_by_username(db, username)
-    if not user or not verify_password(password, user.hashed_password):
-        return False
+        if not credentials:
+            raise JWTError
+        token_data = decode_token(credentials.credentials)
+        return int(token_data.sub)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ошибка аутентификации")
+async def check_admin(user: User) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для выполнения этого действия.")
     return user
 
-
-# 5. ПОЛУЧЕНИЕ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ (РАБОТАЕТ 100%)
 async def get_current_user(
-        credentials: HTTPAuthorizationCredentials = Depends(security),
-        db: AsyncSession = Depends(get_db)
-):
-    token = credentials.credentials
-
-    username = verify_token(token)
-    if not username:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user = await get_user_by_username(db, username)
+    user_id: int = Depends(check_jwt),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """Получает user_id из токена, затем загружает пользователя из БД."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
+        # Эта ситуация маловероятна, если токен валиден, но это хорошая проверка
+        raise HTTPException(status_code=404, detail="User not found")
     return user
+async def get_current_admin_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """
+    1. Получает текущего пользователя с помощью get_current_user.
+    2. Проверяет, является ли пользователь администратором.
+    3. Если да - возвращает пользователя, если нет - выбрасывает ошибку 403 Forbidden.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав для выполнения этого действия."
+        )
+    return current_user

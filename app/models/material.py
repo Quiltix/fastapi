@@ -7,4 +7,4 @@ class Material(Base):
     id = Column(Integer, primary_key=True, index=True)
     lesson_id = Column(Integer, ForeignKey("lessons.id"), nullable=False)  # привязка к занятию
     title = Column(String, nullable=False)
-    url = Column(String, nullable=True)
+    text = Column(String, nullable=True)

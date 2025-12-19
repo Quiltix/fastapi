@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 
@@ -12,3 +12,9 @@ class LessonOut(LessonCreate):
 
     class Config:
         from_attributes = True
+
+class LessonWithProgress(BaseModel):
+    id: int
+    title: str
+    scheduled_at: datetime
+    is_completed: bool = False

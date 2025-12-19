@@ -1,5 +1,9 @@
-from app.auth.utils import get_current_user
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List
+
+from sqlalchemy import select
+
+from app.auth.utils import get_current_user, get_current_admin_user
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.database import get_db
 from app.models.user import User
@@ -12,7 +16,7 @@ router = APIRouter(prefix="/courses", tags=["Courses"])
 async def create_course(
     course: CourseCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    current_user: User=Depends(get_current_admin_user)
 ):
     db_course = Course(**course.model_dump())
     db.add(db_course)
@@ -26,7 +30,7 @@ async def update_course(
     course_id: int,
     course: CourseUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    current_user: User=Depends(get_current_admin_user)
 ):
     db_course = await db.get(Course, course_id)
     if not db_course:
@@ -43,7 +47,7 @@ async def update_course(
 async def delete_course(
     course_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User=Depends(get_current_user)
+    current_user: User=Depends(get_current_admin_user)
 ):
     db_course = await db.get(Course, course_id)
     if not db_course:
@@ -59,3 +63,19 @@ async def get_course(course_id: int, db: AsyncSession = Depends(get_db)):
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
+
+@router.get("/", response_model=List[CourseOut])
+async def get_all_courses(
+    skip: int = Query(0, ge=0, description="Сколько курсов пропустить (для пагинации)"),
+    limit: int = Query(100, ge=1, le=200, description="Максимальное количество курсов для возврата"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User=Depends(get_current_user)
+):
+    """
+    Получение списка всех курсов с пагинацией.
+    Этот эндпоинт доступен для всех пользователей без аутентификации.
+    """
+    query = select(Course).offset(skip).limit(limit)
+    result = await db.execute(query)
+    courses = result.scalars().all()
+    return courses

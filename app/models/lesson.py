@@ -8,4 +8,4 @@ class Lesson(Base):
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     title = Column(String, nullable=False)
-    scheduled_at = Column(DateTime, default=datetime.utcnow)  # время занятия = расписание
+    scheduled_at = Column(DateTime, default=datetime.now)
